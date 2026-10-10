@@ -2,10 +2,47 @@ from flask import Flask, request, send_from_directory
 from twilio.twiml.messaging_response import MessagingResponse
 import requests, re, os, uuid
 from urllib.parse import urlparse
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 app = Flask(__name__)
 os.makedirs("/tmp/files", exist_ok=True)
-MAX_SIZE = 500 * 1024 * 1024 # 500MB para Render
+MAX_SIZE = 500 * 1024 * 1024
+
+# Headers que evitan 403
+BASE_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+    'Accept': '*/*',
+    'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+    'Accept-Encoding': 'gzip, deflate',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1'
+}
+
+def get_session_with_retries():
+    session = requests.Session()
+    retry = Retry(total=3, backoff_factor=1, status_forcelist=[500,502,503,504])
+    session.mount('https://', HTTPAdapter(max_retries=retry))
+    session.mount('http://', HTTPAdapter(max_retries=retry))
+    session.headers.update(BASE_HEADERS)
+    return session
+
+def get_filename_from_response(r, url):
+    # 1. Intenta del header Content-Disposition
+    cd = r.headers.get('Content-Disposition','')
+    if 'filename=' in cd:
+        m = re.search(r'filename="?([^"]+)"?', cd)
+        if m:
+            return m.group(1)
+    # 2. Del URL
+    parsed = urlparse(url)
+    name = os.path.basename(parsed.path)
+    name = re.sub(r'[^a-zA-Z0-9._-]', '', name)[:80]
+    if not name or len(name) < 4:
+        name = f"file_{uuid.uuid4().hex[:6]}.apk"
+    if "." not in name:
+        name += ".mp4"
+    return name
 
 @app.route("/", methods=["GET","POST"])
 def bot():
@@ -26,18 +63,26 @@ def bot():
 
     url = urls[0].strip()
 
+    # Fix para apkcombo / aptoide - agregar referer correcto
+    headers = BASE_HEADERS.copy()
+    if "apkcombo" in url:
+        headers['Referer'] = 'https://apkcombo.com/'
+    elif "aptoide" in url:
+        headers['Referer'] = 'https://zynga-poker.es.aptoide.com/'
+    elif "apkmirror" in url:
+        headers['Referer'] = 'https://www.apkmirror.com/'
+    else:
+        headers['Referer'] = url
+
     try:
-        r = requests.get(url, stream=True, timeout=60, headers={'User-Agent':'Mozilla/5.0'}, allow_redirects=True)
+        session = get_session_with_retries()
+        r = session.get(url, stream=True, timeout=90, headers=headers, allow_redirects=True)
         r.raise_for_status()
 
-        parsed = urlparse(url)
-        filename = os.path.basename(parsed.path) or f"file_{uuid.uuid4().hex[:6]}.mp4"
-        filename = re.sub(r'[^a-zA-Z0-9._-]', '', filename)[:80]
-        if "." not in filename:
-            filename += ".mp4"
-
+        filename = get_filename_from_response(r, url)
         filepath = f"/tmp/files/{filename}"
         size = 0
+
         with open(filepath, 'wb') as f:
             for chunk in r.iter_content(1024*1024):
                 if not chunk: continue
@@ -53,18 +98,4 @@ def bot():
         if size > 15 * 1024 * 1024:
             resp.message(f"Listo: {filename} - {mb:.1f}MB\nPesa mucho para WhatsApp, bajalo aqui:\n{file_url}")
         else:
-            m = resp.message(f"Listo: {filename} - {mb:.1f}MB")
-            m.media(file_url)
-
-        return str(resp), 200, {'Content-Type':'text/xml'}
-
-    except Exception as e:
-        resp.message(f"Error: {str(e)[:200]}")
-        return str(resp), 200, {'Content-Type':'text/xml'}
-
-@app.route("/files/<path:filename>")
-def serve_file(filename):
-    return send_from_directory("/tmp/files", filename, as_attachment=True)
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+            m = resp.message(f"Listo: {filename} - {mb:.
