@@ -1,5 +1,9 @@
-from flask import Flask, request, send_from_directoryfrom twilio.twiml.messaging_response import MessagingResponse
-import requests, re, os, uuid
+from flask import Flask, request, send_from_directory
+from twilio.twiml.messaging_response import MessagingResponse
+import requests
+import re
+import os
+import uuid
 from urllib.parse import urlparse
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -9,19 +13,19 @@ os.makedirs("/tmp/files", exist_ok=True)
 MAX_SIZE = 500 * 1024 * 1024
 
 BASE_HEADERS = {
-'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-'Accept': '*/*',
-'Accept-Language': 'es-ES,es;q=0.9',
-'Connection': 'keep-alive',
+    'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+    'Accept': '*/*',
+    'Accept-Language': 'es-ES,es;q=0.9',
+    'Connection': 'keep-alive',
 }
 
 def get_session():
-    session = requests.Session()
+    s = requests.Session()
     retry = Retry(total=3, backoff_factor=1, status_forcelist=[500,502,503,504])
-    session.mount('https://', HTTPAdapter(max_retries=retry))
-    session.mount('http://', HTTPAdapter(max_retries=retry))
-    session.headers.update(BASE_HEADERS)
-    return session
+    s.mount('https://', HTTPAdapter(max_retries=retry))
+    s.mount('http://', HTTPAdapter(max_retries=retry))
+    s.headers.update(BASE_HEADERS)
+    return s
 
 def get_filename(r, url):
     cd = r.headers.get('Content-Disposition','')
@@ -35,7 +39,10 @@ def get_filename(r, url):
     if not name or len(name) < 5:
         name = f"file_{uuid.uuid4().hex[:6]}.apk"
     if "." not in name:
-        name += ".apk" if 'apk' in r.headers.get('Content-Type','') else ".mp4"
+        if 'apk' in r.headers.get('Content-Type',''):
+            name += ".apk"
+        else:
+            name += ".mp4"
     return name
 
 @app.route("/", methods=["GET","POST","HEAD"])
@@ -47,13 +54,16 @@ def bot():
 
     msg = request.values.get('Body','').strip()
     resp = MessagingResponse()
+
     if not msg or "hola" in msg.lower():
         resp.message("Downloader listo. Mandame el link https://")
         return str(resp), 200, {'Content-Type':'text/xml'}
+
     urls = re.findall(r'(https?://[^\s]+)', msg)
     if not urls:
         resp.message("Mandame un https://")
         return str(resp), 200, {'Content-Type':'text/xml'}
+
     url = urls[0].strip()
     headers = BASE_HEADERS.copy()
     if "apkcombo" in url:
@@ -64,6 +74,7 @@ def bot():
         headers['Referer'] = 'https://www.apkmirror.com/'
     else:
         headers['Referer'] = url
+
     try:
         session = get_session()
         r = session.get(url, stream=True, timeout=90, headers=headers, allow_redirects=True)
@@ -79,15 +90,19 @@ def bot():
                 if size > MAX_SIZE:
                     break
                 f.write(chunk)
+
         base_url = request.url_root.rstrip('/')
         file_url = f"{base_url}/files/{filename}"
         mb = size / (1024*1024)
+
         if size > 15 * 1024 * 1024:
             resp.message(f"Listo: {filename} - {mb:.1f}MB\nBajalo aqui:\n{file_url}")
         else:
             m = resp.message(f"Listo: {filename} - {mb:.1f}MB")
             m.media(file_url)
+
         return str(resp), 200, {'Content-Type':'text/xml'}
+
     except Exception as e:
         resp.message(f"Error: {str(e)[:300]}")
         return str(resp), 200, {'Content-Type':'text/xml'}
