@@ -72,6 +72,8 @@ def bot():
         headers['Referer'] = 'https://zynga-poker.es.aptoide.com/'
     elif "apkmirror" in url:
         headers['Referer'] = 'https://www.apkmirror.com/'
+    elif "apkpure" in url:
+        headers['Referer'] = 'https://apkpure.com/'
     else:
         headers['Referer'] = url
 
@@ -104,7 +106,11 @@ def bot():
         return str(resp), 200, {'Content-Type':'text/xml'}
 
     except Exception as e:
-        resp.message(f"Error: {str(e)[:300]}")
+        err = str(e)[:400]
+        if "NameResolutionError" in err or "Failed to resolve" in err:
+            resp.message(f"No se pudo resolver el dominio de:\n{url}\n\nRender no resuelve apkcombo.com en plan gratis.\nPrueba con el mismo juego pero de apkpure.com o apkmirror.com y si jala.")
+        else:
+            resp.message(f"Error: {err}")
         return str(resp), 200, {'Content-Type':'text/xml'}
 
 @app.route("/files/<path:filename>")
